@@ -1,86 +1,77 @@
 import { Server, Socket } from "socket.io";
 import { User } from "./user-manager";
-import { DefaultEventsMap } from "socket.io/dist/typed-events";
 import { LEAVE_ROOM, UPDATE_USER } from "../libs/events";
 
+interface Room {
+    roomId: string;
+    users: User[];
+}
 
 export class RoomManager {
-    private rooms: ({ roomId: string, users: User[] })[];
-    private users: ({ user: User, roomId: string })[];
+    private rooms: Map<string, Room> = new Map();
+    private users: Map<string, { user: User; roomId: string }> = new Map();
 
-    constructor() {
-        this.rooms = [];
-        this.users = [];
-    }
-
-    getRoom(roomId: string) {
-        return this.rooms.find((room) => room.roomId === roomId);
+    getRoom(roomId: string): Room | undefined {
+        return this.rooms.get(roomId);
     }
 
     getUser(socketId: string) {
-        return this.users.find((user) => user.user.socketId === socketId);
+        return this.users.get(socketId);
     }
 
-    joinRoom(payload: { name: string, email: string, roomId: string, isHost: boolean, image: string | undefined }, socket: Socket, io: Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>) {
-        const existingUser = this.users.find((user) => user.user.email === payload.email && user.roomId === payload.roomId);
-        if (existingUser) {
-            return;
-        }
-
-        const user = new User(payload.name, payload.email, socket.id, payload.isHost, payload.image);
-        this.users.push({ user, roomId: payload.roomId });
-
-        const room = this.getRoom(payload.roomId);
-        if (!room) {
-            const newRoom = { roomId: payload.roomId, users: [user] };
-            this.rooms.push(newRoom);
-            socket.join(payload.roomId);
-            io.to(payload.roomId).emit(UPDATE_USER, newRoom.users, payload.roomId);
+    joinRoom(
+        payload: { name: string; email: string; roomId: string; isHost: boolean; image?: string },
+        socket: Socket,
+        io: Server
+    ) {
+        const existingEntry = [...this.users.values()].find((entry) => entry.user.email === payload.email && entry.roomId === payload.roomId);
+        if (existingEntry) {
+            existingEntry.user.socketId = socket.id;
+            this.users.delete(existingEntry.user.socketId);
+            this.users.set(socket.id, { user: existingEntry.user, roomId: payload.roomId });
         } else {
-            room.users.push(user);
-            socket.join(payload.roomId);
-            io.to(payload.roomId).emit(UPDATE_USER, room.users, payload.roomId);
+            const user = new User(payload.name, payload.email, socket.id, payload.isHost, payload.image);
+            this.users.set(socket.id, { user, roomId: payload.roomId });
+            let room = this.getRoom(payload.roomId);
+            if (!room) {
+                room = { roomId: payload.roomId, users: [] };
+                this.rooms.set(payload.roomId, room);
+            }
+             room.users.push(user);
         }
+        socket.join(payload.roomId);
+        io.to(payload.roomId).emit(UPDATE_USER, this.getRoom(payload.roomId)?.users, payload.roomId);
     }
 
-    leaveRoom(socket: Socket, io: Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>) {
-        const user = this.getUser(socket.id);
-        if (!user) {
-            return; 
-        }
+    leaveRoom(socket: Socket, io: Server) {
+        const entry = this.getUser(socket.id);
+        if (!entry) return;
 
-        const room = this.getRoom(user.roomId);
-        if (!room) {
-            return;
-        }
+        const room = this.getRoom(entry.roomId);
+        if (!room) return;
 
-        room.users = room.users.filter((roomUser) => roomUser.socketId !== socket.id);
-
+        room.users = room.users.filter((user) => user.socketId !== socket.id);
+        this.users.delete(socket.id);
         if (room.users.length === 0) {
-            this.rooms = this.rooms.filter((room) => room.roomId !== user.roomId);
+            this.rooms.delete(entry.roomId);
+        } else {
+            io.to(entry.roomId).emit(UPDATE_USER, room.users, entry.roomId);
         }
-        this.users = this.users.filter((u) => u.user.socketId !== socket.id);
-
-        socket.leave(user.roomId);
-        io.to(user.roomId).emit(UPDATE_USER, room.users, user.roomId);
+        socket.leave(entry.roomId);
         socket.emit(LEAVE_ROOM);
     }
 
-    end (roomId: string, io: Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>) {
+    end(roomId: string, io: Server) {
         const room = this.getRoom(roomId);
-        if (!room) {
-            return;
-        }
-
-        room.users.forEach((user)=>{
+        if (!room) return;
+        room.users.forEach((user) => {
             const socket = io.sockets.sockets.get(user.socketId);
-            if ( socket ){
+            if (socket) {
                 socket.leave(roomId);
                 socket.emit(LEAVE_ROOM);
             }
+            this.users.delete(user.socketId);
         });
-
-        this.rooms = this.rooms.filter((r) => r.roomId !== roomId);
-        this.users = this.users.filter((u) => u.roomId !== roomId);
+        this.rooms.delete(roomId);
     }
 }
