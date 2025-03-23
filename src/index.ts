@@ -32,11 +32,24 @@ app.use(limiter);
 app.use(express.json());
 app.use(cors({
     origin: process.env.CLIENT || "http://localhost:3000",
-    methods : ["GET", "POST"]
+    methods : ["GET"]
 }));
 
 app.get("/", (req, res)=>{
     res.send("Websocket server is working");
+});
+
+
+app.get("/api/v1/room/:roomId", async(req, res)=>{
+    try {
+        const roomId = req.params.roomId;
+        if (!roomId) return res.status(400).json({ message: "Room ID is required" });
+        const room = roomManager.getRoom(roomId);
+        return res.json(room);
+    } catch (error) {
+        console.error("GET ROOM BY ID API ERROR", error);
+        return res.status(500).json({ message: "Internal server error" });
+    }
 });
 
 

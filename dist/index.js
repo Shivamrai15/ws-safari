@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -30,11 +39,24 @@ app.use(limiter);
 app.use(express_1.default.json());
 app.use((0, cors_1.default)({
     origin: process.env.CLIENT || "http://localhost:3000",
-    methods: ["GET", "POST"]
+    methods: ["GET"]
 }));
 app.get("/", (req, res) => {
     res.send("Websocket server is working");
 });
+app.get("/api/v1/room/:roomId", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const roomId = req.params.roomId;
+        if (!roomId)
+            return res.status(400).json({ message: "Room ID is required" });
+        const room = roomManager.getRoom(roomId);
+        return res.json(room);
+    }
+    catch (error) {
+        console.error("GET ROOM BY ID API ERROR", error);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+}));
 const roomManager = new room_manager_1.RoomManager();
 const eventManager = new event_manger_1.EventManager();
 io.on("connection", (socket) => {
