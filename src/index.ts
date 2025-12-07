@@ -39,6 +39,14 @@ app.get("/", (req, res)=>{
     res.send("Websocket server is working");
 });
 
+app.get("/health", (req, res)=>{
+    res.status(200).json({
+        status: "healthy",
+        service: "Real-time Event Gateway",
+        version: "1.0.0"
+    });
+});
+
 
 app.get("/api/v1/room/:roomId", async(req, res)=>{
     try {
