@@ -1,1 +1,1 @@
-{"root":["./src/index.ts","./src/libs/events.ts","./src/libs/types.ts","./src/managers/event-manger.ts","./src/managers/room-manager.ts","./src/managers/user-manager.ts"],"version":"5.8.2"}
+{"root":["./src/index.ts","./src/libs/events.ts","./src/libs/types.ts","./src/managers/event-manger.ts","./src/managers/room-manager.ts","./src/managers/user-manager.ts"],"errors":true,"version":"5.8.2"}
