@@ -39,7 +39,7 @@ app.get("/", (req, res)=>{
     res.send("Websocket server is working");
 });
 
-app.get("/health", (req, res)=>{
+app.get("/api/v1/health", (req, res)=>{
     res.status(200).json({
         status: "healthy",
         service: "Real-time Event Gateway",
