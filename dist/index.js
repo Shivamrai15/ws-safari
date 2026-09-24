@@ -17,9 +17,13 @@ const cors_1 = __importDefault(require("cors"));
 const http_1 = __importDefault(require("http"));
 const express_rate_limit_1 = require("express-rate-limit");
 const socket_io_1 = require("socket.io");
-const room_manager_1 = require("./managers/room-manager");
-const events_1 = require("./libs/events");
-const event_manger_1 = require("./managers/event-manger");
+const redis_adapter_1 = require("@socket.io/redis-adapter");
+const redis_1 = require("./realtime/redis");
+const gateway_1 = require("./realtime/gateway");
+const config_1 = require("./realtime/config");
+const service_1 = require("./jam/service");
+const store_1 = require("./jam/store");
+const handlers_1 = require("./jam/handlers");
 const PORT = process.env.PORT || 8080;
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
@@ -48,78 +52,56 @@ app.get("/api/v1/health", (req, res) => {
     res.status(200).json({
         status: "healthy",
         service: "Real-time Event Gateway",
-        version: "1.0.0"
+        version: "2.0.0"
     });
 });
-app.get("/api/v1/room/:roomId", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const roomId = req.params.roomId;
-        if (!roomId)
-            return res.status(400).json({ message: "Room ID is required" });
-        const room = roomManager.getRoom(roomId);
-        return res.json(room);
-    }
-    catch (error) {
-        console.error("GET ROOM BY ID API ERROR", error);
-        return res.status(500).json({ message: "Internal server error" });
-    }
-}));
-const roomManager = new room_manager_1.RoomManager();
-const eventManager = new event_manger_1.EventManager();
-io.on("connection", (socket) => {
-    console.log("User connected", socket.id);
-    socket.on(events_1.JOIN_ROOM, (payload) => {
-        roomManager.joinRoom(payload, socket, io);
+const withTimeout = (promise, ms) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+]);
+function attachRedisAdapter() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const pubClient = (0, redis_1.createRedisClient)();
+        const subClient = pubClient.duplicate();
+        subClient.on("error", (err) => console.error("Redis Client Error", err));
+        try {
+            yield withTimeout(Promise.all([pubClient.connect(), subClient.connect()]), config_1.REDIS_CONNECT_TIMEOUT_MS);
+            io.adapter((0, redis_adapter_1.createAdapter)(pubClient, subClient));
+            console.log("Socket.IO Redis adapter attached");
+        }
+        catch (error) {
+            console.error("Running without Socket.IO Redis adapter", error);
+            pubClient.destroy();
+            subClient.destroy();
+        }
     });
-    socket.on(events_1.LEAVE_ROOM, () => {
-        roomManager.leaveRoom(socket, io);
+}
+function createJamService(realtime) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const client = (0, redis_1.createRedisClient)();
+        try {
+            yield withTimeout(client.connect(), config_1.REDIS_CONNECT_TIMEOUT_MS);
+            return new service_1.JamService(realtime, new store_1.JamStore(client));
+        }
+        catch (error) {
+            console.error("Jam is disabled because Redis is unavailable", error);
+            client.destroy();
+            return null;
+        }
     });
-    socket.on(events_1.END_ROOM, (payload) => {
-        roomManager.end(payload.roomId, io);
+}
+function start() {
+    return __awaiter(this, void 0, void 0, function* () {
+        yield attachRedisAdapter();
+        const realtime = (0, gateway_1.setupRealtimeGateway)(io);
+        const eventSubscriber = (0, redis_1.createRedisClient)();
+        eventSubscriber.connect().catch((error) => console.error("Realtime event subscriber failed to connect", error));
+        (0, gateway_1.forwardRealtimeEvents)(realtime, eventSubscriber);
+        const jamService = yield createJamService(realtime);
+        realtime.on("connection", (socket) => (0, handlers_1.registerJamHandlers)(socket, jamService));
+        server.listen(PORT, () => {
+            console.log(`App is listening on PORT ${PORT}`);
+        });
     });
-    socket.on(events_1.ENQUEUE, (payload) => {
-        eventManager.enqueue(payload, socket);
-    });
-    socket.on(events_1.DEQUEUE, (payload) => {
-        eventManager.dequeue(payload, socket);
-    });
-    socket.on(events_1.PUSH, (payload) => {
-        eventManager.push(payload, socket);
-    });
-    socket.on(events_1.POP, (payload) => {
-        eventManager.pop(payload, socket);
-    });
-    socket.on(events_1.PRIORITY_ENQUEUE, (payload) => {
-        eventManager.priorityEnqueue(payload, socket);
-    });
-    socket.on(events_1.CLEAR, (payload) => {
-        eventManager.clear(payload, socket);
-    });
-    socket.on(events_1.SHIFT_TOP, (payload) => {
-        eventManager.shiftToTopOfQueue(payload, socket);
-    });
-    socket.on(events_1.REPLACE, (payload) => {
-        eventManager.replace(payload, socket);
-    });
-    socket.on(events_1.REMOVE, (payload) => {
-        eventManager.remove(payload, socket);
-    });
-    socket.on(events_1.PLAYNEXT, (payload) => {
-        eventManager.playNext(payload, socket);
-    });
-    socket.on(events_1.PLAY, (payload) => {
-        eventManager.play(payload, socket);
-    });
-    socket.on(events_1.PAUSE, (payload) => {
-        eventManager.pause(payload, socket);
-    });
-    socket.on(events_1.SEEK, (payload) => {
-        eventManager.seek(payload, socket);
-    });
-    socket.on("disconnect", () => {
-        roomManager.leaveRoom(socket, io);
-    });
-});
-server.listen(PORT, () => {
-    console.log(`App is listening on PORT ${PORT}`);
-});
+}
+start();

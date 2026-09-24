@@ -1,1 +1,1 @@
-{"root":["./src/index.ts","./src/libs/events.ts","./src/libs/types.ts","./src/managers/event-manger.ts","./src/managers/room-manager.ts","./src/managers/user-manager.ts"],"errors":true,"version":"5.8.2"}
+{"root":["./src/index.ts","./src/jam/catalog.ts","./src/jam/handlers.ts","./src/jam/reducer.ts","./src/jam/service.ts","./src/jam/settings.ts","./src/jam/store.ts","./src/jam/types.ts","./src/realtime/auth.ts","./src/realtime/config.ts","./src/realtime/gateway.ts","./src/realtime/redis.ts","./src/realtime/rooms.ts"],"version":"5.9.3"}
