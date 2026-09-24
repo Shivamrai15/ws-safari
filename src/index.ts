@@ -2,11 +2,14 @@ import express from "express";
 import cors from "cors";
 import http from "http";
 import { rateLimit } from "express-rate-limit";
-import { Server } from "socket.io";
-import { RoomManager } from "./managers/room-manager";
-import { LEAVE_ROOM, JOIN_ROOM, ENQUEUE, DEQUEUE, PUSH, POP, PRIORITY_ENQUEUE, CLEAR, SHIFT_TOP, REPLACE, REMOVE, PLAYNEXT, PLAY, PAUSE, SEEK, END_ROOM } from "./libs/events";
-import { Album, Song } from "./libs/types";
-import { EventManager } from "./managers/event-manger";
+import { Namespace, Server } from "socket.io";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { createRedisClient } from "./realtime/redis";
+import { forwardRealtimeEvents, setupRealtimeGateway } from "./realtime/gateway";
+import { REDIS_CONNECT_TIMEOUT_MS } from "./realtime/config";
+import { JamService } from "./jam/service";
+import { JamStore } from "./jam/store";
+import { registerJamHandlers } from "./jam/handlers";
 
 
 const PORT = process.env.PORT! || 8080;
@@ -43,102 +46,57 @@ app.get("/api/v1/health", (req, res)=>{
     res.status(200).json({
         status: "healthy",
         service: "Real-time Event Gateway",
-        version: "1.0.0"
+        version: "2.0.0"
     });
 });
 
 
-app.get("/api/v1/room/:roomId", async(req, res)=>{
+const withTimeout = <T>(promise: Promise<T>, ms: number) => Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+]);
+
+async function attachRedisAdapter() {
+    const pubClient = createRedisClient();
+    const subClient = pubClient.duplicate();
+    subClient.on("error", (err) => console.error("Redis Client Error", err));
     try {
-        const roomId = req.params.roomId;
-        if (!roomId) return res.status(400).json({ message: "Room ID is required" });
-        const room = roomManager.getRoom(roomId);
-        return res.json(room);
+        await withTimeout(Promise.all([pubClient.connect(), subClient.connect()]), REDIS_CONNECT_TIMEOUT_MS);
+        io.adapter(createAdapter(pubClient, subClient));
+        console.log("Socket.IO Redis adapter attached");
     } catch (error) {
-        console.error("GET ROOM BY ID API ERROR", error);
-        return res.status(500).json({ message: "Internal server error" });
+        console.error("Running without Socket.IO Redis adapter", error);
+        pubClient.destroy();
+        subClient.destroy();
     }
-});
+}
 
+async function createJamService(realtime: Namespace) {
+    const client = createRedisClient();
+    try {
+        await withTimeout(client.connect(), REDIS_CONNECT_TIMEOUT_MS);
+        return new JamService(realtime, new JamStore(client));
+    } catch (error) {
+        console.error("Jam is disabled because Redis is unavailable", error);
+        client.destroy();
+        return null;
+    }
+}
 
-const roomManager = new RoomManager();
-const eventManager = new EventManager();
+async function start() {
+    await attachRedisAdapter();
 
-io.on("connection", (socket)=>{
-    console.log("User connected", socket.id);
-    
-    socket.on(JOIN_ROOM, ( payload : { name : string, email: string, roomId: string, isHost:boolean, image: string|undefined })=>{
-        roomManager.joinRoom(payload, socket, io);
+    const realtime = setupRealtimeGateway(io);
+    const eventSubscriber = createRedisClient();
+    eventSubscriber.connect().catch((error) => console.error("Realtime event subscriber failed to connect", error));
+    forwardRealtimeEvents(realtime, eventSubscriber);
+
+    const jamService = await createJamService(realtime);
+    realtime.on("connection", (socket) => registerJamHandlers(socket, jamService));
+
+    server.listen(PORT, ()=>{
+        console.log(`App is listening on PORT ${PORT}`)
     });
+}
 
-    socket.on(LEAVE_ROOM, ()=>{
-        roomManager.leaveRoom(socket, io);
-    });
-
-    socket.on(END_ROOM, (payload: { roomId: string })=>{
-        roomManager.end(payload.roomId, io);
-    });
-
-    socket.on(ENQUEUE, (payload: { roomId: string, songs : ( Song & { album : Album } )[], clear?: boolean })=>{
-        eventManager.enqueue(payload, socket);
-    });
-
-    socket.on(DEQUEUE, (payload: { roomId: string })=>{
-        eventManager.dequeue(payload, socket);
-    });
-
-    socket.on(PUSH, (payload: { roomId: string, song: ( Song & { album: Album } )})=>{
-        eventManager.push(payload, socket);
-    });
-
-    socket.on(POP, (payload: { roomId: string })=>{
-        eventManager.pop(payload, socket);
-    });
-
-    socket.on(PRIORITY_ENQUEUE, (payload: { roomId:string, songs: ( Song & { album: Album } )[] })=>{
-        eventManager.priorityEnqueue(payload, socket);
-    });
-
-    socket.on(CLEAR, (payload: { roomId: string })=>{
-        eventManager.clear(payload, socket);
-    });
-
-    socket.on(SHIFT_TOP, (payload: { roomId: string, id: string })=>{
-        eventManager.shiftToTopOfQueue(payload, socket);
-    });
-
-    socket.on(REPLACE, (payload: { roomId: string, id : string, source : number, destination : number })=>{
-        eventManager.replace(payload, socket);
-    });
-
-    socket.on(REMOVE, (payload: { roomId: string, id: string })=>{
-        eventManager.remove(payload, socket);
-    });
-
-    socket.on(PLAYNEXT, (payload: { roomId: string, song: ( Song & { album: Album }) })=>{
-        eventManager.playNext(payload, socket);
-    });
-
-    socket.on(PLAY, (payload: { roomId: string })=>{
-        eventManager.play(payload, socket);
-    });
-
-    socket.on(PAUSE, (payload: { roomId: string })=>{
-        eventManager.pause(payload, socket);  
-    });
-
-    socket.on(SEEK, (payload: { roomId: string, time: number })=>{
-        eventManager.seek(payload, socket);
-    });
-
-    socket.on("disconnect", ()=>{
-        roomManager.leaveRoom(socket, io);  
-    });
-
-});
-
-
-
-server.listen(PORT, ()=>{
-    console.log(`App is listening on PORT ${PORT}`)
-});
+start();
